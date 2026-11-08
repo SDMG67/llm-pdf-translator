@@ -70,8 +70,6 @@ Celery worker（celery_app.py）
 | GET | `/cache` | 列出记录（历史遗留） |
 | DELETE | `/cache/{id}` | 删除记录（历史遗留） |
 
-交互式文档：`http://127.0.0.1:8000/docs`
-
 ## PDF 上传与解析
 
 `/pdf/parse` 接收 `multipart/form-data`，其中 `file` 字段携带文件。返回内容：
