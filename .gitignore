@@ -1,0 +1,36 @@
+We need answer only code modified file. Need apply suggested edit to original. Need output complete modified .gitignore content exactly suggested? Need consider instruction "Apply SUGGESTED EDIT to ORIGINAL CODE. Output complete modified file. Output ONLY code." So final should be content of suggested edit likely. Need no markdown? They say output only code. We should provide raw code block? "Output ONLY code. Do NOT explain..." Usually final no code fences? They want code. Could include just text. Need ensure complete modified file. Use suggested edit content. No extra. Need preserve comments. Let's output exactly suggested edit. But maybe need include all original? Suggested edit already complete. Let's final.
+# 环境变量（含 API 密钥，绝不提交）
+.env
+.env.*
+
+# 数据库文件（SQLite 及 Celery SQLite broker/result）
+*.db
+*.sqlite
+*.sqlite3
+
+# 运行期数据（上传/结果/导出/数据库，全部忽略）
+data/
+
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# 测试与工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+

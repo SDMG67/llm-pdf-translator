@@ -1,0 +1,86 @@
+x-core-build: &core-build
+  context: .
+  dockerfile: Dockerfile
+  args:
+    PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+
+x-gui-build: &gui-build
+  context: .
+  dockerfile: Dockerfile.gui
+  args:
+    PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.org/simple}"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Core image: built once here, reused by the worker.
+  api:
+    image: llm-translator-core:local
+    build: *core-build
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      - CELERY_BROKER=redis://redis:6379/0
+      - CELERY_RESULT=redis://redis:6379/0
+      - DATABASE_URL=sqlite+aiosqlite:///./data/app.db
+      - CORS_ORIGINS=*
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # Reuses the core image built by the api service: no second pip install.
+  worker:
+    image: llm-translator-core:local
+    pull_policy: never
+    command: celery -A backend worker -l info --pool solo
+    environment:
+      - CELERY_BROKER=redis://redis:6379/0
+      - CELERY_RESULT=redis://redis:6379/0
+      - DATABASE_URL=sqlite+aiosqlite:///./data/app.db
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  # Gradio-only image: much smaller than the API/worker image.
+  gui:
+    image: llm-translator-gui:local
+    build: *gui-build
+    command: python gui.py
+    ports:
+      - "7860:7860"
+    environment:
+      - API_URL=http://api:8000
+      - GUI_PORT=7860
+      - GRADIO_SERVER_NAME=0.0.0.0
+    depends_on:
+      api:
+        condition: service_healthy

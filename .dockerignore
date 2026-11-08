@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.git/
+.gitignore
+*.db
+.env
+.vscode/
+.pytest_cache/
+.ruff_cache/
+*.log
+tests/
+data/uploads/
+data/results/
+data/exports/
