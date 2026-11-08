@@ -1,131 +1,103 @@
-# LLM Translator
+# LLM Translator（大模型翻译服务）
 
-An async LLM translation service: FastAPI backend + Celery task queue + pluggable
-translation engines (strategy pattern) + Gradio frontend, with translation caching
-and per-engine QPS rate limiting.
+一个异步的大模型翻译服务：**FastAPI 后端 + Celery 任务队列 + 可插拔翻译引擎（策略模式）+ Gradio 前端**，并内置翻译缓存与按翻译引擎的 QPS 限流。
 
-## Architecture
+## 架构
 
-```
-Browser (gui.py, Gradio)
+```text
+浏览器（gui.py, Gradio）
    |  POST /translator/create   GET /translator/get/{id}   DELETE /translator/{id}
    v
-FastAPI (main.py + translator.py)
-   |  1. validate engine
-   |  2. build cache key from cache_params()
-   |  3. cache hit -> return immediately
+FastAPI（main.py + translator.py）
+   |  1. 校验翻译引擎
+   |  2. 由 cache_params() 生成缓存键
+   |  3. 命中缓存 -> 直接返回
    v
-Celery broker (SQLite for dev / Redis for prod)
+Celery broker（开发用 SQLite / 生产用 Redis）
    v
-Celery worker (celery_app.py)
-   |  engine.translate(): throttle(QPS) -> do_translate() -> LLM
-   |  on success: write cache (sync session)
+Celery worker（celery_app.py）
+   |  engine.translate(): 限流(QPS) -> do_translate() -> LLM
+   |  成功后：写入缓存（同步会话）
    v
-Engine registry (translators/)
-   |- mock / echo / upper     (free, for testing the wiring)
-   |- google / bing           (free web endpoints, no API key)
-   |- deepseek  (DEEPSEEK_* vars, retry + rate limit + token usage)
-   +- openai    (OPENAI_* vars,   official endpoint or gateway)
+翻译引擎注册表（translators/）
+   |- mock / echo / upper     （免费，用于测试整条链路）
+   |- google / bing           （免费网页接口，无需 API Key）
+   |- deepseek  （DEEPSEEK_* 变量，重试 + 限流 + token 用量统计）
+   +- openai    （OPENAI_* 变量，官方端点或兼容网关）
 ```
 
-The `google` and `bing` engines use public web translation endpoints and need
-no API key. They are unofficial and may be rate-limited or unavailable:
+`google` 与 `bing` 引擎使用公开的网页翻译接口，无需 API Key。但它们属于非官方接口，可能被限流或不可用：
 
-- Bing checks `cn.bing.com` first and falls back to `www.bing.com`.
-- Google can be blocked by some networks; set `HTTPS_PROXY`/`HTTP_PROXY`, or
-  override `GOOGLE_TRANSLATE_ENDPOINT`, when direct access is unavailable.
+- Bing 优先请求 `cn.bing.com`，失败时回退到 `www.bing.com`。
+- Google 在部分网络环境下可能被屏蔽；无法直连时，请设置 `HTTPS_PROXY`/`HTTP_PROXY`，或覆盖 `GOOGLE_TRANSLATE_ENDPOINT`。
 
-## Project layout
+## 项目结构
 
-| Path | Purpose |
-|------|---------|
-| `main.py` | FastAPI app: CORS, /health, /cache CRUD, router include |
-| `translator.py` | `/translator/*` routes (create / get / cancel) |
-| `celery_app.py` | Celery task definitions |
-| `backend.py` | Celery app config (broker, backend) |
-| `database.py` | Async engine (API) + sync engine (worker) |
-| `cache.py` | Cache key builder + async/sync cache access |
-| `pdf_service.py` | PDF validation, page/block extraction, limits |
-| `pdf_router.py` | `/pdf/*` upload, translate, result and download routes |
-| `pdf_rebuild.py` | Layout-preserving mono/dual PDF reconstruction |
-| `schema.py` | Pydantic request model + SQLAlchemy models |
-| `rate_limiter.py` | Shared per-engine QPS limiter |
-| `translators/` | BaseTranslator + engine implementations + registry |
-| `gui.py` | Gradio frontend |
-| `requirements-core.txt` | API/worker runtime dependencies |
-| `requirements-gui.txt` | Gradio-only dependencies |
-| `Dockerfile` | Core image (API + worker) |
-| `Dockerfile.gui` | Lightweight GUI image |
-| `tests/` | pytest suite (runs Celery eagerly, no broker needed) |
+| 路径 | 作用 |
+|------|------|
+| `main.py` | FastAPI 应用：CORS、/health、/cache CRUD、路由挂载 |
+| `translator.py` | `/translator/*` 路由（创建 / 查询 / 取消） |
+| `celery_app.py` | Celery 任务定义 |
+| `backend.py` | Celery 应用配置（broker、backend） |
+| `database.py` | 异步引擎（API 侧）+ 同步引擎（worker 侧） |
+| `cache.py` | 缓存键构建 + 异步/同步缓存访问 |
+| `pdf_service.py` | PDF 校验、页面/文本块提取、限制 |
+| `pdf_router.py` | `/pdf/*` 上传、翻译、结果与下载路由 |
+| `pdf_rebuild.py` | 保留排版的 mono/dual PDF 重建 |
+| `schema.py` | Pydantic 请求模型 + SQLAlchemy 模型 |
+| `rate_limiter.py` | 共享的按引擎 QPS 限流器 |
+| `translators/` | BaseTranslator + 各引擎实现 + 注册表 |
+| `gui.py` | Gradio 前端 |
+| `requirements-core.txt` | API/worker 运行时依赖 |
+| `requirements-gui.txt` | 仅 Gradio 依赖 |
+| `Dockerfile` | 核心镜像（API + worker） |
+| `Dockerfile.gui` | 轻量 GUI 镜像 |
+| `tests/` | pytest 测试套件（以 Celery eager 模式运行，无需 broker） |
 
-## API
+## API 接口
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| POST | `/translator/create` | Create a translation task (or return cache hit) |
-| GET | `/translator/get/{task_id}` | Poll task status / result |
-| DELETE | `/translator/{task_id}` | Cancel a running task |
-| POST | `/pdf/parse` | Upload a PDF and extract pages/text blocks |
-| POST | `/pdf/translate` | Upload a PDF and translate its text blocks asynchronously |
-| GET | `/pdf/result/{task_id}` | Poll a PDF translation task |
-| GET | `/pdf/download/{task_id}` | Download mono/dual PDF or JSON (`?format=mono\|dual\|json`) |
-| POST | `/cache` | Add a record (legacy) |
-| GET | `/cache` | List records (legacy) |
-| DELETE | `/cache/{id}` | Delete a record (legacy) |
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查 |
+| POST | `/translator/create` | 创建翻译任务（或命中缓存直接返回） |
+| GET | `/translator/get/{task_id}` | 轮询任务状态 / 结果 |
+| DELETE | `/translator/{task_id}` | 取消运行中的任务 |
+| POST | `/pdf/parse` | 上传 PDF 并提取页面/文本块 |
+| POST | `/pdf/translate` | 上传 PDF 并异步翻译其文本块 |
+| GET | `/pdf/result/{task_id}` | 轮询 PDF 翻译任务 |
+| GET | `/pdf/download/{task_id}` | 下载 mono/dual PDF 或 JSON（`?format=mono\|dual\|json`） |
+| POST | `/cache` | 新增记录（历史遗留） |
+| GET | `/cache` | 列出记录（历史遗留） |
+| DELETE | `/cache/{id}` | 删除记录（历史遗留） |
 
-Interactive docs: `http://127.0.0.1:8000/docs`
+交互式文档：`http://127.0.0.1:8000/docs`
 
-## PDF upload and parsing
+## PDF 上传与解析
 
-`/pdf/parse` accepts `multipart/form-data` with a `file` field. It returns:
+`/pdf/parse` 接收 `multipart/form-data`，其中 `file` 字段携带文件。返回内容：
 
-- page count and parsed page count
-- per-page width/height and extracted text
-- text blocks with page, bbox, block id and text
-- truncation flags and parser metadata
+- 总页数与实际解析页数
+- 每页的宽/高及提取出的文本
+- 文本块：包含页码、bbox、块 id 与文本
+- 截断标志与解析器元数据
 
-`/pdf/translate` accepts the same file plus `translate_model`, `language`,
-optional `model`, and optional `ignore_cache`. It parses the PDF in the Celery
-worker and translates each block. After translation it rebuilds the PDF with
-the translated text inside the original block rectangles:
+`/pdf/translate` 接收同样的文件，外加 `translate_model`、`language`、可选的 `model` 和可选的 `ignore_cache`。它在 Celery worker 中解析 PDF 并逐块翻译。翻译完成后，会在原始文本块矩形内填入译文来重建 PDF：
 
-- `GET /pdf/download/{task_id}?format=mono` — translated-only PDF
-- `GET /pdf/download/{task_id}?format=dual` — original + translated pages
-- `GET /pdf/download/{task_id}?format=json` — per-block translation JSON
+- `GET /pdf/download/{task_id}?format=mono` —— 仅译文版 PDF
+- `GET /pdf/download/{task_id}?format=dual` —— 原文 + 译文对照页
+- `GET /pdf/download/{task_id}?format=json` —— 逐块翻译的 JSON
 
-The mono PDF uses a built-in CJK font for `zh`/`ja`/`ko`, while Latin letters,
-digits and URLs are drawn with Helvetica so their glyph shapes and letter
-spacing stay normal. Original span sizes and bold flags are preserved:
-Helvetica Bold is used for Latin bold text, and a light CJK stroke reproduces
-Chinese bold without changing font size. Two-column pages are detected and each block is clipped
-to its own column, with cross-column titles/captions kept at page width. Each
-translated block keeps its source top and may only grow down to the next
-block's top edge; PyMuPDF wraps/shrinks text inside that safe region, then
-truncates with an ellipsis if it still cannot fit. Body paragraphs use a
-two-character first-line indent and non-final lines are justified with a
-bounded gap so English abbreviations do not create extreme spacing. Scanned
-PDFs without a text layer still need OCR.
+mono PDF 对 `zh`/`ja`/`ko` 使用内置 CJK 字体，而拉丁字母、数字和 URL 则用 Helvetica 绘制，以保持字形与字距正常。原始 span 的字号与加粗标记会被保留：拉丁文加粗使用 Helvetica Bold，中文加粗则用轻微的 CJK 描边在不改变字号的前提下实现。双栏页面会被识别，每个文本块被裁剪到各自栏内，跨栏的标题/图注则保持整页宽度。每个译文块保持原顶部位置，只能向下扩展到下一个块的上边沿；PyMuPDF 会在该安全区域内自动换行/缩放文本，若仍放不下则用省略号截断。正文段落使用两字符首行缩进，非末行在有限间距内两端对齐，以避免英文缩写造成过大间距。无文本层的扫描版 PDF 仍需 OCR。
 
-The Gradio frontend fetches generated files through the GUI server before
-offering them to the browser. This keeps downloads working in Docker, where
-`API_URL=http://api:8000` is an internal-only hostname.
+Gradio 前端会先通过 GUI 服务器拉取生成的文件，再提供给浏览器下载。这样在 Docker 环境中也能正常下载——在那里 `API_URL=http://api:8000` 是仅内部可达的主机名。
 
-For large documents, the free `bing`/`google` engines translate small batches
-with a bounded thread pool instead of issuing one request per text block.
-Failed blocks keep their source text and are reported as `failed_blocks`, so a
-single rate-limit response does not discard the whole document. The Gradio
-PDF poller waits up to `PDF_POLL_SECONDS` (default 3600) and shows batch
-progress while a large document is being processed.
+对于大文档，免费的 `bing`/`google` 引擎会用有界线程池批量翻译小段文本，而不是为每个文本块单独发一次请求。翻译失败的块会保留原文，并以 `failed_blocks` 上报，因此单次限流响应不会导致整份文档作废。Gradio 的 PDF 轮询最长等待 `PDF_POLL_SECONDS`（默认 3600）秒，并在处理大文档时显示批量进度。
 
-For mono PDFs the original page is used as the canvas. Only the source text
-rectangles are redacted; embedded images, figures, table rules and vector
-artwork are preserved in their original positions before translated text is
-overlaid.
+对于 mono PDF，以原始页面作为画布。只对源文本矩形做脱字（redact）；随后在叠加译文之前，图片、图形、表格线和矢量图形都保留在原位。
 
-## Quick start (local dev)
+## 快速开始（本地开发）
 
-1. Create a virtualenv and install deps:
+1. 创建虚拟环境并安装依赖：
 
    ```bash
    python -m venv .venv
@@ -134,69 +106,60 @@ overlaid.
    pip install -r requirements.txt
    ```
 
-2. Configure env:
+2. 配置环境变量：
 
    ```bash
-   cp env.example .env   # then fill in DEEPSEEK_API_KEY / OPENAI_API_KEY if needed
+   cp env.example .env   # 然后按需填写 DEEPSEEK_API_KEY / OPENAI_API_KEY
    ```
 
-3. Run the three processes in separate terminals:
+3. 在三个终端分别启动三个进程：
 
    ```bash
    uvicorn main:app --reload
    celery -A backend worker -l info --pool solo
-   python gui.py            # open http://127.0.0.1:7860
+   python gui.py            # 打开 http://127.0.0.1:7860
    ```
 
-## Docker (production-like)
+## Docker 部署（类生产环境）
 
 ```bash
 docker compose up --build -d
 # API: http://127.0.0.1:8000
 # GUI: http://127.0.0.1:7860
 
-# Backend-only, faster first build (skip Gradio):
+# 仅后端，首次构建更快（跳过 Gradio）：
 docker compose up --build -d redis api worker
 docker compose down
 ```
 
-The default starts four services: `redis` (broker), `api` (FastAPI),
-`worker` (Celery) and `gui` (Gradio). The SQLite/PDF data volume is mounted
-at `./data`.
+默认启动四个服务：`redis`（broker）、`api`（FastAPI）、`worker`（Celery）和 `gui`（Gradio）。SQLite/PDF 数据卷挂载在 `./data`。
 
-### Docker build speed
+### Docker 构建速度
 
-The full stack uses two images:
+完整栈使用两个镜像：
 
-- `llm-translator-core:local` for API + worker
-- `llm-translator-gui:local` for Gradio only
+- `llm-translator-core:local` 用于 API + worker
+- `llm-translator-gui:local` 仅用于 Gradio
 
-The default `docker compose up --build -d` builds the core and GUI images.
-The worker reuses the core image instead of running another dependency
-install. Both Dockerfiles use a BuildKit `uv` cache mount, skip the unnecessary
-pip self-upgrade, and default to PyPI. For a backend-only first build, use
-`docker compose up --build -d redis api worker`; Gradio is then not built.
+默认的 `docker compose up --build -d` 会构建 core 与 GUI 两个镜像。worker 复用 core 镜像，无需再装一遍依赖。两个 Dockerfile 都使用了 BuildKit 的 `uv` 缓存挂载、跳过了多余的 pip 自升级，并默认使用 PyPI。若只需后端，首次构建用 `docker compose up --build -d redis api worker`，此时不会构建 Gradio。
 
-To use another index:
+使用其他镜像源：
 
 ```bash
   PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple docker compose build
 ```
 
-## Tests
+## 测试
 
 ```bash
 pip install -r requirements-dev.txt
 pytest -v
 ```
 
-The suite uses Celery eager mode and a throwaway SQLite DB, so no broker or
-network access is required.
+测试套件使用 Celery eager 模式与一个临时 SQLite 数据库，因此无需 broker 或网络访问。
 
-## Adding a new engine
+## 新增翻译引擎
 
-1. Create `translators/myengine.py`, subclass `BaseTranslator`, set `name`,
-implement `do_translate`, and override `cache_params` if quality-affecting
-parameter matter.
-2. Register it in `translators/registry.py`.
-3. Add its name to `ENGINES` in `gui.py`.
+1. 新建 `translators/myengine.py`，继承 `BaseTranslator`，设置 `name`、实现 `do_translate`，如有影响翻译质量的可调参数则覆写 `cache_params`。
+2. 在 `translators/registry.py` 中注册。
+3. 把引擎名加入 `gui.py` 的 `ENGINES` 列表。
