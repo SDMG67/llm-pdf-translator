@@ -299,6 +299,18 @@ def translate_pdf(
         encoding="utf-8",
     )
 
+    self.update_state(
+        state="PROGRESS",
+        meta={
+            "current": total,
+            "total": total,
+            "percent": 0.99,
+            "cache_hits": cache_hits,
+            "failed_blocks": failed_blocks,
+            "phase": "rebuilding",
+        },
+    )
+
     mono_path = (OUTPUT_DIR / f"{result['job_id']}_mono.pdf").resolve()
     dual_path = (OUTPUT_DIR / f"{result['job_id']}_dual.pdf").resolve()
     try:

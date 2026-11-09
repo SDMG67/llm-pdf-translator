@@ -225,7 +225,9 @@ def do_translate_pdf(
         info = result.get("info") or {}
         current = info.get("current")
         total = info.get("total")
-        if total:
+        if info.get("phase") == "rebuilding":
+            progress(0.99, desc="正在重建 PDF 版面...")
+        elif total:
             fraction = min(max(float(current or 0) / float(total), 0.0), 0.99)
             progress(
                 fraction,

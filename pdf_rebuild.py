@@ -238,24 +238,23 @@ def _draw_lines(
     for line_index, line in enumerate(lines):
         x = float(rect.x0) + 0.5
         is_last_line = line_index == len(lines) - 1
-        atoms = _atoms(line, fonts) if justify else None
         gap = 0.0
+        atoms = None
         if (
             justify
             and not is_last_line
             and max_width
-            and atoms is not None
-            and len(atoms) > 1
         ):
-            gap = max(
+            possible_gap = max(
                 0.0,
                 (float(max_width) - _rich_length(line, fonts, size))
-                / (len(atoms) - 1),
+                / max(1, len(_atoms(line, fonts)) - 1),
             )
-            # Very short lines would otherwise get absurd word/character gaps.
-            if gap > size * 0.6:
-                gap = 0.0
-                atoms = None
+            # Only justify when the needed expansion is modest. This avoids
+            # both ragged sparse lines and absurd gaps.
+            if size * 0.12 <= possible_gap <= size * 0.6:
+                gap = possible_gap
+                atoms = _atoms(line, fonts)
 
         if atoms is None:
             atoms_to_draw = [line]
@@ -433,16 +432,14 @@ def rebuild_pdf(
                     body_sizes.append(float(size))
             body_size = statistics.median(body_sizes) if body_sizes else 10.0
 
-            # Redact only source text rectangles. images=0 / graphics=0 keep
-            # embedded images and vector/table line art untouched.
-            for bbox in bboxes:
-                if bbox is not None:
-                    out_page.add_redact_annot(
-                        _pymupdf().Rect(*bbox),
-                        fill=None,
-                        cross_out=False,
-                    )
+            # One page-level redaction is much faster than annotating hundreds
+            # of text blocks. images=0 / graphics=0 preserve figures/tables.
             if any(bbox is not None for bbox in bboxes):
+                out_page.add_redact_annot(
+                    out_page.rect,
+                    fill=None,
+                    cross_out=False,
+                )
                 out_page.apply_redactions(
                     images=0,
                     graphics=0,
